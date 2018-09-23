@@ -27,7 +27,8 @@ type PredicateSqlizerFactory interface {
 	UpdateTypemap(typemap skydb.RecordSchema) skydb.RecordSchema
 	AddJoinsToSelectBuilder(q sq.SelectBuilder) sq.SelectBuilder
 	NewPredicateSqlizer(p skydb.Predicate) (sq.Sqlizer, error)
-	NewAccessControlSqlizer(user *skydb.AuthInfo, aclLevel skydb.RecordACLLevel) (sq.Sqlizer, error)
+	NewSortSqlizer(s skydb.Sort) (sq.Sqlizer, error)
+	NewAccessControlSqlizer(user *skydb.AuthInfo, aclLevel skydb.RecordACLLevel) (sq.Sqlizer, error)	
 }
 
 // predicateSqlizerFactory is a factory for creating sqlizer for predicate
@@ -45,6 +46,11 @@ func NewPredicateSqlizerFactory(db skydb.Database, primaryTable string) Predicat
 		joinedTables: []joinedTable{},
 	}
 }
+
+func (f *predicateSqlizerFactory) NewSortSqlizer(s skydb.Sort) (sq.Sqlizer, error) {	
+	return f.newExpressionSqlizerForKeyPath(s.Expression)
+}
+
 
 func (f *predicateSqlizerFactory) NewPredicateSqlizer(p skydb.Predicate) (sq.Sqlizer, error) {
 	if p.IsEmpty() {

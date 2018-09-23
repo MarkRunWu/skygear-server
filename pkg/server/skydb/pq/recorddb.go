@@ -318,7 +318,13 @@ func (db *database) Query(query *skydb.Query, accessControlOptions *skydb.Access
 		return nil, err
 	}
 
-	for _, sort := range query.Sorts {
+	factory = builder.NewPredicateSqlizerFactory(db, query.Type)	
+	for _, sort := range query.Sorts {		
+		_, err := factory.NewSortSqlizer(sort)
+		if err != nil {
+			q = factory.AddJoinsToSelectBuilder(q)
+		}
+
 		orderBy, err := builder.SortOrderBySQL(query.Type, sort)
 		if err != nil {
 			return nil, err
