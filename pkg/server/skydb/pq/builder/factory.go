@@ -28,7 +28,7 @@ type PredicateSqlizerFactory interface {
 	AddJoinsToSelectBuilder(q sq.SelectBuilder) sq.SelectBuilder
 	NewPredicateSqlizer(p skydb.Predicate) (sq.Sqlizer, error)
 	NewSortSqlizer(s skydb.Sort) (sq.Sqlizer, error)
-	NewAccessControlSqlizer(user *skydb.AuthInfo, aclLevel skydb.RecordACLLevel) (sq.Sqlizer, error)	
+	NewAccessControlSqlizer(user *skydb.AuthInfo, aclLevel skydb.RecordACLLevel) (sq.Sqlizer, error)
 }
 
 // predicateSqlizerFactory is a factory for creating sqlizer for predicate
@@ -47,10 +47,9 @@ func NewPredicateSqlizerFactory(db skydb.Database, primaryTable string) Predicat
 	}
 }
 
-func (f *predicateSqlizerFactory) NewSortSqlizer(s skydb.Sort) (sq.Sqlizer, error) {	
+func (f *predicateSqlizerFactory) NewSortSqlizer(s skydb.Sort) (sq.Sqlizer, error) {
 	return f.newExpressionSqlizerForKeyPath(s.Expression)
 }
-
 
 func (f *predicateSqlizerFactory) NewPredicateSqlizer(p skydb.Predicate) (sq.Sqlizer, error) {
 	if p.IsEmpty() {
@@ -237,6 +236,7 @@ func (f *predicateSqlizerFactory) newExpressionSqlizer(expr skydb.Expression) (e
 
 func (f *predicateSqlizerFactory) newExpressionSqlizerForKeyPath(expr skydb.Expression) (expressionSqlizer, error) {
 	if !expr.IsKeyPath() {
+		fmt.Printf("expr %v", expr.Type)
 		panic("expression is not a key path")
 	}
 

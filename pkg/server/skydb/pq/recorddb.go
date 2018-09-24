@@ -318,18 +318,18 @@ func (db *database) Query(query *skydb.Query, accessControlOptions *skydb.Access
 		return nil, err
 	}
 
-	factory = builder.NewPredicateSqlizerFactory(db, query.Type)	
-	for _, sort := range query.Sorts {		
-		_, err := factory.NewSortSqlizer(sort)
-		if err != nil {
+	factory := builder.NewPredicateSqlizerFactory(db, query.Type)
+	for _, sort := range query.Sorts {
+		sqlizer, err := factory.NewSortSqlizer(sort)
+		if err == nil {
 			q = factory.AddJoinsToSelectBuilder(q)
+			q = q.OrderBy(sqlizer)
+		} else {
+			orderBy, err := builder.SortOrderBySQL(query.Type, sort)
+			if err != nil {
+				return nil, err
+			}
 		}
-
-		orderBy, err := builder.SortOrderBySQL(query.Type, sort)
-		if err != nil {
-			return nil, err
-		}
-		q = q.OrderBy(orderBy)
 	}
 
 	if query.Limit != nil {
@@ -349,6 +349,9 @@ func (db *database) Query(query *skydb.Query, accessControlOptions *skydb.Access
 	}
 	typemap = factory.UpdateTypemap(typemap)
 	q = db.selectQuery(q, query.Type, typemap)
+
+	sql, _, _ := q.ToSql()
+	fmt.Printf("q: %v", sql)
 
 	rows, err := db.c.QueryWith(q)
 	return newRows(query.Type, typemap, rows, err)
