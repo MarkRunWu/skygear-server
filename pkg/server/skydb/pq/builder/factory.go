@@ -26,8 +26,8 @@ import (
 type PredicateSqlizerFactory interface {
 	UpdateTypemap(typemap skydb.RecordSchema) skydb.RecordSchema
 	AddJoinsToSelectBuilder(q sq.SelectBuilder) sq.SelectBuilder
+	UpdateJoinsTableFromSort(s skydb.Sort) (string, error)
 	NewPredicateSqlizer(p skydb.Predicate) (sq.Sqlizer, error)
-	NewSortSqlizer(s skydb.Sort) (sq.Sqlizer, error)
 	NewAccessControlSqlizer(user *skydb.AuthInfo, aclLevel skydb.RecordACLLevel) (sq.Sqlizer, error)
 }
 
@@ -45,10 +45,6 @@ func NewPredicateSqlizerFactory(db skydb.Database, primaryTable string) Predicat
 		primaryTable: primaryTable,
 		joinedTables: []joinedTable{},
 	}
-}
-
-func (f *predicateSqlizerFactory) NewSortSqlizer(s skydb.Sort) (sq.Sqlizer, error) {
-	return f.newExpressionSqlizerForKeyPath(s.Expression)
 }
 
 func (f *predicateSqlizerFactory) NewPredicateSqlizer(p skydb.Predicate) (sq.Sqlizer, error) {
@@ -259,6 +255,9 @@ func (f *predicateSqlizerFactory) newExpressionSqlizerForKeyPath(expr skydb.Expr
 		field = keyPathField
 		if field.Type == skydb.TypeReference && !isLast {
 			alias = f.createLeftJoin(field.ReferenceType, components[i], "_id")
+			fmt.Printf("Value: %v", expr.Value)
+			lastComponent := components[len(components)-1]
+			f.addExtraColumn(fmt.Sprintf(alias+"_"+lastComponent), field.Type, expr)
 		}
 	}
 	return newExpressionSqlizer(alias, field, expr), nil
@@ -331,4 +330,23 @@ type joinedTable struct {
 // equal compares whether two specifications of table join are equal
 func (a joinedTable) equal(b joinedTable) bool {
 	return a.secondaryTable == b.secondaryTable && a.primaryColumn == b.primaryColumn && a.secondaryColumn == b.secondaryColumn
+}
+
+func (f *predicateSqlizerFactory) UpdateJoinsTableFromSort(s skydb.Sort) (string, error) {
+	expr := s.Expression
+	switch expr.Type {
+	case skydb.KeyPath:
+		sqlizer, err := f.newExpressionSqlizerForKeyPath(expr)
+		if err != nil {
+			return "", err
+		}
+		order, err := sortOrderOrderBySQL(s.Order)
+		if err != nil {
+			return "", err
+		}
+		sql, _, _ := sqlizer.ToSql()
+		return sql + " " + order, nil
+	default:
+		return SortOrderBySQL(f.primaryTable, s)
+	}
 }

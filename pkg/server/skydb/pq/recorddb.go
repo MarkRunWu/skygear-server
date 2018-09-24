@@ -283,7 +283,7 @@ func (db *database) applyQueryPredicate(q sq.SelectBuilder, factory builder.Pred
 			return q, err
 		}
 		q = q.Where(sqlizer)
-		q = factory.AddJoinsToSelectBuilder(q)
+		// q = factory.AddJoinsToSelectBuilder(q)
 	}
 
 	if db.DatabaseType() == skydb.PublicDatabase && !accessControlOptions.BypassAccessControl {
@@ -313,23 +313,19 @@ func (db *database) Query(query *skydb.Query, accessControlOptions *skydb.Access
 
 	q := psql.Select()
 	factory := builder.NewPredicateSqlizerFactory(db, query.Type)
-	q, err = db.applyQueryPredicate(q, factory, query, accessControlOptions)
-	if err != nil {
-		return nil, err
+
+	for _, sort := range query.Sorts {
+		orderBy, err := factory.UpdateJoinsTableFromSort(sort)
+		if err != nil {
+			return nil, err
+		}
+		q = q.OrderBy(orderBy)
 	}
 
-	factory := builder.NewPredicateSqlizerFactory(db, query.Type)
-	for _, sort := range query.Sorts {
-		sqlizer, err := factory.NewSortSqlizer(sort)
-		if err == nil {
-			q = factory.AddJoinsToSelectBuilder(q)
-			q = q.OrderBy(sqlizer)
-		} else {
-			orderBy, err := builder.SortOrderBySQL(query.Type, sort)
-			if err != nil {
-				return nil, err
-			}
-		}
+	q, err = db.applyQueryPredicate(q, factory, query, accessControlOptions)
+	q = factory.AddJoinsToSelectBuilder(q)
+	if err != nil {
+		return nil, err
 	}
 
 	if query.Limit != nil {
@@ -608,8 +604,12 @@ func columnSqlizersForSelect(recordType string, typemap skydb.RecordSchema) map[
 				Value: column,
 			}
 		}
-
-		sqlizer := builder.NewExpressionSqlizer(recordType, fieldType, expr)
+		var sqlizer sq.Sqlizer
+		if fieldType.Type == skydb.TypeReference {
+			sqlizer = builder.NewExpressionSqlizer(fieldType.ReferenceType, fieldType, expr)
+		} else {
+			sqlizer = builder.NewExpressionSqlizer(recordType, fieldType, expr)
+		}
 		if fieldType.Type == skydb.TypeGeometry {
 			sqlizer, _ = builder.RequireCast(sqlizer)
 		}
