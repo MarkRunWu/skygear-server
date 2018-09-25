@@ -159,8 +159,9 @@ func (db *database) Save(record *skydb.Record) error {
 	if err := db.preSave(typemap, record); err != nil {
 		return err
 	}
-
 	row := db.c.QueryRowWith(upsert)
+	sql, _, _ := upsert.ToSql()
+	fmt.Printf("sql: %v", sql)
 	if err = newRecordScanner(record.ID.Type, typemap, row).Scan(record); err != nil {
 		if isUniqueViolated(err) {
 			return skyerr.NewErrorf(
@@ -378,9 +379,12 @@ func (db *database) QueryCount(query *skydb.Query, accessControlOptions *skydb.A
 	q := db.selectQuery(psql.Select(), query.Type, typemap)
 	factory := builder.NewPredicateSqlizerFactory(db, query.Type)
 	q, err = db.applyQueryPredicate(q, factory, query, accessControlOptions)
+	q = factory.AddJoinsToSelectBuilder(q)
 	if err != nil {
 		return 0, err
 	}
+	sql, _, _ := q.ToSql()
+	fmt.Printf("q: %v", sql)
 
 	rows, err := db.c.QueryWith(q)
 	if err != nil {
