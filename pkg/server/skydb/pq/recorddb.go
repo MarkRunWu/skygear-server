@@ -159,7 +159,6 @@ func (db *database) Save(record *skydb.Record) error {
 	if err := db.preSave(typemap, record); err != nil {
 		return err
 	}
-
 	row := db.c.QueryRowWith(upsert)
 	if err = newRecordScanner(record.ID.Type, typemap, row).Scan(record); err != nil {
 		if isUniqueViolated(err) {
@@ -283,7 +282,6 @@ func (db *database) applyQueryPredicate(q sq.SelectBuilder, factory builder.Pred
 			return q, err
 		}
 		q = q.Where(sqlizer)
-		q = factory.AddJoinsToSelectBuilder(q)
 	}
 
 	if db.DatabaseType() == skydb.PublicDatabase && !accessControlOptions.BypassAccessControl {
@@ -313,17 +311,23 @@ func (db *database) Query(query *skydb.Query, accessControlOptions *skydb.Access
 
 	q := psql.Select()
 	factory := builder.NewPredicateSqlizerFactory(db, query.Type)
+
 	q, err = db.applyQueryPredicate(q, factory, query, accessControlOptions)
 	if err != nil {
 		return nil, err
 	}
 
 	for _, sort := range query.Sorts {
-		orderBy, err := builder.SortOrderBySQL(query.Type, sort)
+		orderBy, err := factory.NewSort(sort)
 		if err != nil {
 			return nil, err
 		}
 		q = q.OrderBy(orderBy)
+	}
+
+	q = factory.AddJoinsToSelectBuilder(q)
+	if err != nil {
+		return nil, err
 	}
 
 	if query.Limit != nil {
@@ -376,6 +380,7 @@ func (db *database) QueryCount(query *skydb.Query, accessControlOptions *skydb.A
 	if err != nil {
 		return 0, err
 	}
+	q = factory.AddJoinsToSelectBuilder(q)
 
 	rows, err := db.c.QueryWith(q)
 	if err != nil {
@@ -489,6 +494,11 @@ func (rs *recordScanner) Scan(record *skydb.Record) error {
 			continue
 		}
 
+		if strings.HasPrefix(column, "_sort") {
+			// Used for sorting in distinct query, shouldn't be included in record
+			continue
+		}
+
 		switch svalue := value.(type) {
 		default:
 			return fmt.Errorf("received unexpected scanned type = %T for column = %s", value, column)
@@ -599,8 +609,14 @@ func columnSqlizersForSelect(recordType string, typemap skydb.RecordSchema) map[
 				Value: column,
 			}
 		}
+		var sqlizer sq.Sqlizer
 
-		sqlizer := builder.NewExpressionSqlizer(recordType, fieldType, expr)
+		if fieldType.Type == skydb.TypeReference && len(expr.KeyPathComponents()) == 2 {
+			// For field like category.name should be prefixed by reference table name
+			sqlizer = builder.NewExpressionSqlizer(fieldType.ReferenceType, fieldType, expr)
+		} else {
+			sqlizer = builder.NewExpressionSqlizer(recordType, fieldType, expr)
+		}
 		if fieldType.Type == skydb.TypeGeometry {
 			sqlizer, _ = builder.RequireCast(sqlizer)
 		}

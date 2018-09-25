@@ -26,6 +26,7 @@ import (
 type PredicateSqlizerFactory interface {
 	UpdateTypemap(typemap skydb.RecordSchema) skydb.RecordSchema
 	AddJoinsToSelectBuilder(q sq.SelectBuilder) sq.SelectBuilder
+	NewSort(s skydb.Sort) (string, error)
 	NewPredicateSqlizer(p skydb.Predicate) (sq.Sqlizer, error)
 	NewAccessControlSqlizer(user *skydb.AuthInfo, aclLevel skydb.RecordACLLevel) (sq.Sqlizer, error)
 }
@@ -200,7 +201,7 @@ func (f *predicateSqlizerFactory) tryOptimizeDistancePredicate(p skydb.Predicate
 
 func (f *predicateSqlizerFactory) newExpressionSqlizer(expr skydb.Expression) (expressionSqlizer, error) {
 	if expr.IsKeyPath() {
-		return f.newExpressionSqlizerForKeyPath(expr)
+		return f.newExpressionSqlizerForKeyPath(expr, false)
 	}
 
 	if expr.Type == skydb.Literal {
@@ -229,7 +230,7 @@ func (f *predicateSqlizerFactory) newExpressionSqlizer(expr skydb.Expression) (e
 		`unexpected expression type`)
 }
 
-func (f *predicateSqlizerFactory) newExpressionSqlizerForKeyPath(expr skydb.Expression) (expressionSqlizer, error) {
+func (f *predicateSqlizerFactory) newExpressionSqlizerForKeyPath(expr skydb.Expression, addJoinedFieldToExtraColumn bool) (expressionSqlizer, error) {
 	if !expr.IsKeyPath() {
 		panic("expression is not a key path")
 	}
@@ -253,6 +254,10 @@ func (f *predicateSqlizerFactory) newExpressionSqlizerForKeyPath(expr skydb.Expr
 		field = keyPathField
 		if field.Type == skydb.TypeReference && !isLast {
 			alias = f.createLeftJoin(field.ReferenceType, components[i], "_id")
+			if addJoinedFieldToExtraColumn {
+				lastComponent := components[len(components)-1]
+				f.addExtraColumn(lastComponent+alias, field.Type, expr, alias)
+			}
 		}
 	}
 	return newExpressionSqlizer(alias, field, expr), nil
@@ -298,13 +303,14 @@ func (f *predicateSqlizerFactory) AddJoinsToSelectBuilder(q sq.SelectBuilder) sq
 	return q
 }
 
-func (f *predicateSqlizerFactory) addExtraColumn(key string, fieldType skydb.DataType, expr skydb.Expression) {
+func (f *predicateSqlizerFactory) addExtraColumn(key string, fieldType skydb.DataType, expr skydb.Expression, refrenceType string) {
 	if f.extraColumns == nil {
 		f.extraColumns = map[string]skydb.FieldType{}
 	}
 	f.extraColumns[key] = skydb.FieldType{
-		Type:       fieldType,
-		Expression: expr,
+		Type:          fieldType,
+		Expression:    expr,
+		ReferenceType: refrenceType,
 	}
 }
 
@@ -325,4 +331,35 @@ type joinedTable struct {
 // equal compares whether two specifications of table join are equal
 func (a joinedTable) equal(b joinedTable) bool {
 	return a.secondaryTable == b.secondaryTable && a.primaryColumn == b.primaryColumn && a.secondaryColumn == b.secondaryColumn
+}
+
+func (f *predicateSqlizerFactory) NewSort(s skydb.Sort) (string, error) {
+	expr := s.Expression
+	if expr.IsKeyPath() && len(expr.KeyPathComponents()) == 2 {
+		_, err := f.newExpressionSqlizerForKeyPath(expr, true)
+		if err != nil {
+			return "", err
+		}
+		order, err := sortOrderOrderBySQL(s.Order)
+		if err != nil {
+			return "", err
+		}
+		deprecatedSortKey := ""
+		for key, field := range f.extraColumns {
+			if field.Expression == expr {
+				deprecatedSortKey = key
+				break
+			}
+		}
+		if deprecatedSortKey != "" {
+			// replace by new key with prefix _sort
+			sortKey := "_sort" + deprecatedSortKey
+			f.extraColumns[sortKey] = f.extraColumns[deprecatedSortKey]
+			delete(f.extraColumns, deprecatedSortKey)
+			return sortKey + " " + order, nil
+		}
+		return "", skyerr.NewErrorf(skyerr.RecordQueryInvalid,
+			`Cannot find field for keypath "%s" within f.extraColumns`, expr.Value.(string))
+	}
+	return SortOrderBySQL(f.primaryTable, s)
 }

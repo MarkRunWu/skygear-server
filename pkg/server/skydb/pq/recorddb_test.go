@@ -825,6 +825,7 @@ func TestQuery(t *testing.T) {
 			OwnerID: "user_id",
 			Data: map[string]interface{}{
 				"hidden": false,
+				"name":   "Important",
 			},
 		}
 		category2 := skydb.Record{
@@ -832,12 +833,14 @@ func TestQuery(t *testing.T) {
 			OwnerID: "user_id",
 			Data: map[string]interface{}{
 				"hidden": true,
+				"name":   "Funny",
 			},
 		}
 
 		db := c.PrivateDB("userid")
 		_, err := db.Extend("category", skydb.RecordSchema{
 			"hidden": skydb.FieldType{Type: skydb.TypeBoolean},
+			"name":   skydb.FieldType{Type: skydb.TypeString},
 		})
 		So(err, ShouldBeNil)
 
@@ -884,6 +887,50 @@ func TestQuery(t *testing.T) {
 			So(err, ShouldBeNil)
 			So(len(records), ShouldEqual, 1)
 			So(records[0], ShouldResemble, record2)
+		})
+
+		Convey("query records ordered by reference ascendingly", func() {
+			query := skydb.Query{
+				Type: "note",
+				Sorts: []skydb.Sort{
+					skydb.Sort{
+						Expression: skydb.Expression{
+							Type:  skydb.KeyPath,
+							Value: "category.name",
+						},
+						Order: skydb.Ascending,
+					},
+				},
+			}
+			accessControlOptions := skydb.AccessControlOptions{}
+			records, err := exhaustRows(db.Query(&query, &accessControlOptions))
+			So(err, ShouldBeNil)
+			So(len(records), ShouldEqual, 3)
+			So(records[0], ShouldResemble, record3)
+			So(records[1], ShouldResemble, record2)
+			So(records[2], ShouldResemble, record1)
+		})
+
+		Convey("query records ordered by reference descendingly", func() {
+			query := skydb.Query{
+				Type: "note",
+				Sorts: []skydb.Sort{
+					skydb.Sort{
+						Expression: skydb.Expression{
+							Type:  skydb.KeyPath,
+							Value: "category.name",
+						},
+						Order: skydb.Descending,
+					},
+				},
+			}
+			accessControlOptions := skydb.AccessControlOptions{}
+			records, err := exhaustRows(db.Query(&query, &accessControlOptions))
+			So(err, ShouldBeNil)
+			So(len(records), ShouldEqual, 3)
+			So(records[0], ShouldResemble, record1)
+			So(records[1], ShouldResemble, record2)
+			So(records[2], ShouldResemble, record3)
 		})
 
 		Convey("query records by comparing field in a referenced record", func() {

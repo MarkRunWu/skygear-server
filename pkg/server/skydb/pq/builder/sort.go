@@ -26,7 +26,11 @@ func SortOrderBySQL(alias string, sort skydb.Sort) (string, error) {
 
 	switch sort.Expression.Type {
 	case skydb.KeyPath:
-		expr = fullQuoteIdentifier(alias, sort.Expression.Value.(string))
+		if len(sort.Expression.KeyPathComponents()) == 2 {
+			expr = fullQuoteIdentifier("", sort.Expression.Value.(string))
+		} else {
+			expr = fullQuoteIdentifier(alias, sort.Expression.Value.(string))
+		}
 	case skydb.Function:
 		var err error
 		expr, err = funcOrderBySQL(alias, sort.Expression.Value.(skydb.Func))
