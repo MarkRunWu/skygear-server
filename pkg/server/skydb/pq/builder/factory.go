@@ -23,12 +23,56 @@ import (
 	"github.com/skygeario/skygear-server/pkg/server/skyerr"
 )
 
-type PredicateSqlizerFactory interface {
+type SqlBuilderFactory interface {
 	UpdateTypemap(typemap skydb.RecordSchema) skydb.RecordSchema
+	AddJoineTable(joinedTables []joinedTable)
+	AddExtraColumns
 	AddJoinsToSelectBuilder(q sq.SelectBuilder) sq.SelectBuilder
+}
+
+type sqlBuilderFactory struct {
+	joinedTable: []joinedTable,
+	extraColumns  map[string]skydb.FieldType
+}
+
+func NewSqlBuilderFactory(
+	predicateFactory PredicateSqlizerFactory,
+	sortFactory SortExpressionFactory) SqlBuilderFactory {
+	
+
+	for i, alias := predicateFactory.joinedTables {
+		alias.
+	}
+	
+	return sqlBuilderFactor{
+		predicateFactory,
+		sortFactory
+	}
+}
+
+type sortExpressFactory struct {
+	db           skydb.Database
+	primaryTable string
+	joinedTables []joinedTable
+	extraColumns map[string]skydb.FieldType
+}
+
+type SortExpressionFactory interface {
 	NewSort(s skydb.Sort) (string, error)
+}
+
+func NewSortExpressionFactory(db skydb.Database,  primaryTable string) SortExpressionFactory {
+	return &sortExpressFactory{
+		db:           db,
+		primaryTable: primaryTable,
+		joinedTables: []joinedTable{},
+	}
+}
+
+type PredicateSqlizerFactory interface {
 	NewPredicateSqlizer(p skydb.Predicate) (sq.Sqlizer, error)
 	NewAccessControlSqlizer(user *skydb.AuthInfo, aclLevel skydb.RecordACLLevel) (sq.Sqlizer, error)
+	Build()
 }
 
 // predicateSqlizerFactory is a factory for creating sqlizer for predicate
@@ -201,7 +245,7 @@ func (f *predicateSqlizerFactory) tryOptimizeDistancePredicate(p skydb.Predicate
 
 func (f *predicateSqlizerFactory) newExpressionSqlizer(expr skydb.Expression) (expressionSqlizer, error) {
 	if expr.IsKeyPath() {
-		return f.newExpressionSqlizerForKeyPath(expr, false)
+		return f.newExpressionSqlizerForKeyPath(expr)
 	}
 
 	if expr.Type == skydb.Literal {
@@ -230,7 +274,7 @@ func (f *predicateSqlizerFactory) newExpressionSqlizer(expr skydb.Expression) (e
 		`unexpected expression type`)
 }
 
-func (f *predicateSqlizerFactory) newExpressionSqlizerForKeyPath(expr skydb.Expression, addJoinedFieldToExtraColumn bool) (expressionSqlizer, error) {
+func (f *predicateSqlizerFactory) newExpressionSqlizerForKeyPath(expr skydb.Expression) (expressionSqlizer, error) {
 	if !expr.IsKeyPath() {
 		panic("expression is not a key path")
 	}
@@ -254,13 +298,44 @@ func (f *predicateSqlizerFactory) newExpressionSqlizerForKeyPath(expr skydb.Expr
 		field = keyPathField
 		if field.Type == skydb.TypeReference && !isLast {
 			alias = f.createLeftJoin(field.ReferenceType, components[i], "_id")
-			if addJoinedFieldToExtraColumn {
-				lastComponent := components[len(components)-1]
-				f.addExtraColumn(lastComponent+alias, field.Type, expr, alias)
-			}
 		}
 	}
 	return newExpressionSqlizer(alias, field, expr), nil
+}
+
+func (f *predicateSqlizerFactory) newSortExpressionForKeyPath(expr skydb.Expression) (string, error) {
+	if !expr.IsKeyPath() {
+		panic("expression is not a key path")
+	}
+
+	components := expr.KeyPathComponents()
+	keyPath := expr.Value.(string)
+	if len(components) > 2 {
+		return "", skyerr.NewErrorf(skyerr.RecordQueryInvalid,
+			`keypath "%s" with more than 2 components is not supported`, keyPath)
+	}
+
+	alias := f.primaryTable
+	fields, err := skydb.TraverseColumnTypes(f.db, f.primaryTable, keyPath)
+	if err != nil {
+		return "", skyerr.NewError(skyerr.RecordQueryInvalid, err.Error())
+	}
+
+	field := skydb.FieldType{}
+	for i, keyPathField := range fields {
+		isLast := (i == len(components)-1)
+		field = keyPathField
+		if field.Type == skydb.TypeReference && !isLast {
+			alias = f.createLeftJoin(field.ReferenceType, components[i], "_id")
+		}
+	}
+	lastComponent := components[len(components)-1]
+	sortKey := fullQuoteIdentifier(alias, lastComponent)
+	if alias != f.primaryTable {
+		sortKey = "_sort" + lastComponent + alias
+		f.addExtraColumn(sortKey, skydb.TypeReference, expr, alias)
+	}
+	return sortKey, nil
 }
 
 // createLeftJoin create an alias of a table to be joined to the primary table
@@ -287,7 +362,7 @@ func (f *predicateSqlizerFactory) aliasName(secondaryTable string, indexInJoined
 }
 
 // AddJoinsToSelectBuilder adds join clauses to a SelectBuilder
-func (f *predicateSqlizerFactory) AddJoinsToSelectBuilder(q sq.SelectBuilder) sq.SelectBuilder {
+func (f *sqlBuilderFactor) AddJoinsToSelectBuilder(q sq.SelectBuilder) sq.SelectBuilder {
 	for i, alias := range f.joinedTables {
 		aliasName := f.aliasName(alias.secondaryTable, i)
 		joinClause := fmt.Sprintf("%s AS %s ON %s = %s",
@@ -314,7 +389,7 @@ func (f *predicateSqlizerFactory) addExtraColumn(key string, fieldType skydb.Dat
 	}
 }
 
-func (f *predicateSqlizerFactory) UpdateTypemap(typemap skydb.RecordSchema) skydb.RecordSchema {
+func (f *sqlBuilderFactor) UpdateTypemap(typemap skydb.RecordSchema) skydb.RecordSchema {
 	for key, field := range f.extraColumns {
 		typemap[key] = field
 	}
@@ -333,10 +408,10 @@ func (a joinedTable) equal(b joinedTable) bool {
 	return a.secondaryTable == b.secondaryTable && a.primaryColumn == b.primaryColumn && a.secondaryColumn == b.secondaryColumn
 }
 
-func (f *predicateSqlizerFactory) NewSort(s skydb.Sort) (string, error) {
+func (f *sortExpressFactory) NewSort(s skydb.Sort) (string, error) {
 	expr := s.Expression
-	if expr.IsKeyPath() && len(expr.KeyPathComponents()) == 2 {
-		_, err := f.newExpressionSqlizerForKeyPath(expr, true)
+	if expr.IsKeyPath() {
+		sort, err := f.newSortExpressionForKeyPath(expr)
 		if err != nil {
 			return "", err
 		}
@@ -344,22 +419,7 @@ func (f *predicateSqlizerFactory) NewSort(s skydb.Sort) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		deprecatedSortKey := ""
-		for key, field := range f.extraColumns {
-			if field.Expression == expr {
-				deprecatedSortKey = key
-				break
-			}
-		}
-		if deprecatedSortKey != "" {
-			// replace by new key with prefix _sort
-			sortKey := "_sort" + deprecatedSortKey
-			f.extraColumns[sortKey] = f.extraColumns[deprecatedSortKey]
-			delete(f.extraColumns, deprecatedSortKey)
-			return sortKey + " " + order, nil
-		}
-		return "", skyerr.NewErrorf(skyerr.RecordQueryInvalid,
-			`Cannot find field for keypath "%s" within f.extraColumns`, expr.Value.(string))
+		return sort + " " + order, nil
 	}
 	return SortOrderBySQL(f.primaryTable, s)
 }
